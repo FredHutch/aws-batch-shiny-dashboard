@@ -1,6 +1,7 @@
 library(shinydashboard)
 library(jsonlite)
 library(DT)
+library(lubridate)
 
 ui <- dashboardPage(
   dashboardHeader(title = "AWS Batch"),
@@ -70,17 +71,83 @@ ui <- dashboardPage(
 )
 
 server <- function(input, output) {
+  
   get_job_list <- function(job_queue, job_status){
     r <- system(paste('aws batch list-jobs --job-queue', job_queue, '--job-status', toupper(job_status)), intern=TRUE)
     d <- fromJSON(r)
-    return(d$jobSummaryList)
+    d <- d$jobSummaryList
+    
+    if(job_status == "RUNNING" & length(d) > 0){
+      d <- d[,c("jobName", "jobId", "startedAt", "createdAt")]
+    }
+    if(job_status == "RUNNABLE" & length(d) > 0){
+      d <- d[,c("jobName", "jobId", "createdAt")]
+    }
+    if(job_status == "SUCCEEDED" & length(d) > 0){
+      d <- d[,c("jobName", "jobId", "startedAt", "createdAt", "stoppedAt")]
+    }
+    if(job_status == "PENDING" & length(d) > 0){
+      d <- d[,c("jobName", "jobId", "createdAt")]
+    }
+    if(job_status == "STARTING" & length(d) > 0){
+      d <- d[,c("jobName", "jobId", "createdAt")]
+    }
+    if(job_status == "FAILED" & length(d) > 0){
+      d <- d[,c("jobName", "statusReason", "jobId", "startedAt", "createdAt", "stoppedAt")]
+    }
+    if(length(d) > 0){
+      if(nrow(d) > 0){
+        d <- format_timestamp_columns(d)
+      }
+    }
+    return(d)
+  }
+  
+  format_timestamp_columns <- function(d){
+    if(length(d) > 0){
+      if(nrow(d) > 0){
+        if('startedAt' %in% colnames(d)){
+          d$started <- sapply(d$startedAt, format_timestamp)
+          d$startedAt <- NULL
+        }
+        if('createdAt' %in% colnames(d)){
+          d$created <- sapply(d$createdAt, format_timestamp)
+          d$createdAt <- NULL
+        }
+        if('stoppedAt' %in% colnames(d)){
+          d$stopped <- sapply(d$stoppedAt, format_timestamp)
+          d$stoppedAt <- NULL
+        }
+      }
+    }
+    return(d)
+  }
+  
+  current_time <- as.numeric(Sys.time())*1000
+  
+  format_timestamp <- function(t){
+    if(is.numeric((t)) & length(t) == 1 & is.na(t) == FALSE){
+      td <- duration(num = as.duration((current_time - t) / 1000), units = "seconds")
+      output <- c()
+      for(u in c("days", "hours", "minutes", "seconds")){
+        v <- as.numeric(td, unit=u)
+        if(v > 1 & u != "seconds"){
+          output <- c(output, paste(as.character(floor(v)), substr(u, 1, 1), sep=''))
+          td <- td - duration(num=floor(as.numeric(td, unit=u)), units=u)
+        }
+        if(u == "seconds"){
+          output <- c(output, paste(as.character(floor(v)), 's'))
+        }
+      }
+      return(paste(paste(output, collapse=", "), "ago"))
+    }
+    return(t)
   }
   
   njobs <- function(job_queue, job_status){
     d <- get_job_list(job_queue, job_status)
     if(length(d) > 0){return(nrow(d))}else{return(0)}
   }
-  
   output$runningBox <- renderValueBox({
     valueBox(
       njobs('spot-test', 'RUNNING'), "Running", icon = icon("list"),
